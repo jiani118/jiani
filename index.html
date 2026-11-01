@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>视频下载器</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#2f6fed">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="视频下载">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="apple-touch-icon" href="/icon-512.png">
+<link rel="icon" href="/icon-192.png">
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1a1a1a; --muted:#666; --accent:#2f6fed; --border:#dde1e6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111317; --card:#1b1e24; --text:#eee; --muted:#9aa0a6; --accent:#5b8cff; --border:#2c3038; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background:var(--bg); color:var(--text); display:flex; justify-content:center; padding:24px 16px; }
+  .wrap { width:100%; max-width:560px; }
+  h1 { font-size:1.5rem; margin:8px 0 4px; }
+  p.sub { color:var(--muted); margin:0 0 20px; font-size:.9rem; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; }
+  input { width:100%; padding:12px; border:1px solid var(--border); border-radius:8px; font-size:1rem;
+          background:var(--bg); color:var(--text); }
+  button { padding:12px 16px; border:0; border-radius:8px; background:var(--accent); color:#fff;
+           font-size:1rem; cursor:pointer; }
+  button.alt { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button:disabled { opacity:.5; cursor:wait; }
+  .row { display:flex; gap:8px; margin-top:12px; }
+  .row button { flex:1; }
+  select { width:100%; margin-top:12px; padding:12px; border:1px solid var(--border); border-radius:8px;
+           font-size:1rem; background:var(--bg); color:var(--text); }
+  .bar { height:8px; border-radius:999px; background:var(--border); overflow:hidden; margin-top:14px; }
+  #fill { height:100%; width:0; background:var(--accent); transition:width .4s; }
+  #ptext { margin-top:6px; }
+  #result { display:none; margin-top:16px; }
+  #result img { width:100%; border-radius:8px; }
+  #title { font-weight:600; margin:10px 0 2px; }
+  #meta { color:var(--muted); font-size:.85rem; }
+  #err { color:#d93025; margin-top:12px; font-size:.9rem; }
+  summary { cursor:pointer; font-weight:600; }
+  .muted { color:var(--muted); font-weight:400; font-size:.85rem; }
+  #popular { margin-top:12px; display:grid; grid-template-columns:repeat(2, 1fr); gap:8px; }
+  .pop { display:flex; align-items:center; gap:10px; padding:8px; border:1px solid var(--border);
+         border-radius:10px; font-size:.85rem; line-height:1.25; }
+  .pop b { display:block; }
+  .pop small { color:var(--muted); }
+  .badge { flex:none; width:32px; height:32px; border-radius:8px; color:#fff; font-weight:700;
+           display:flex; align-items:center; justify-content:center; }
+  #slist { margin-top:12px; max-height:240px; overflow-y:auto; display:flex; flex-wrap:wrap; gap:6px; }
+  #slist span { padding:4px 10px; border:1px solid var(--border); border-radius:999px; font-size:.8rem; }
+  .note { color:var(--muted); font-size:.78rem; margin-top:16px; line-height:1.5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>视频下载器</h1>
+  <p class="sub">粘贴视频链接，解析后下载</p>
+  <div class="card">
+    <input id="url" type="url" placeholder="https://..." autocomplete="off">
+    <div class="row"><button id="parse">解析</button></div>
+    <div id="err"></div>
+    <div id="result">
+      <img id="thumb" alt="">
+      <div id="title"></div>
+      <div id="meta"></div>
+      <select id="quality"></select>
+      <div class="row">
+        <button id="dlv">下载视频</button>
+        <button id="dla" class="alt">仅音频</button>
+      </div>
+      <div id="prog" style="display:none">
+        <div class="bar"><div id="fill"></div></div>
+        <div id="ptext" class="muted"></div>
+      </div>
+    </div>
+  </div>
+  <details id="sites" class="card" style="margin-top:12px">
+    <summary>支持的网站 <span id="count" class="muted"></span></summary>
+    <div id="popular"></div>
+    <input id="sq" type="search" placeholder="搜索网站，如 youtube、bilibili" style="margin-top:12px">
+    <div id="slist"></div>
+    <p class="note" id="sver"></p>
+  </details>
+  <p class="note">请仅下载你拥有权利或获得授权的内容，并遵守各平台的服务条款与当地法律。</p>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const fmt = s => s ? Math.floor(s/60) + ":" + String(s%60).padStart(2,"0") : "";
+
+$("parse").onclick = async () => {
+  const url = $("url").value.trim();
+  $("err").textContent = "";
+  $("result").style.display = "none";
+  if (!url) return;
+  $("parse").disabled = true; $("parse").textContent = "解析中…";
+  try {
+    const r = await fetch("/api/info", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || "解析失败");
+    $("thumb").src = d.thumbnail || "";
+    $("thumb").style.display = d.thumbnail ? "block" : "none";
+    $("title").textContent = d.title || "未命名";
+    $("meta").textContent = [d.uploader, fmt(d.duration)].filter(Boolean).join(" · ");
+    const q = $("quality");
+    q.innerHTML = '<option value="">最佳画质</option>' +
+      (d.heights || []).map(h => `<option value="${h}">${h}p 及以下</option>`).join("");
+    $("result").style.display = "block";
+  } catch (e) {
+    $("err").textContent = e.message;
+  } finally {
+    $("parse").disabled = false; $("parse").textContent = "解析";
+  }
+};
+
+let allSites = null, zhMap = {};
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const zhOf = s => {
+  const l = s.toLowerCase();
+  const k = Object.keys(zhMap).find(k => l.startsWith(k));
+  return k ? zhMap[k] : "";
+};
+const renderSites = () => {
+  const kw = $("sq").value.trim().toLowerCase();
+  const list = allSites
+    .filter(s => (s + " " + zhOf(s)).toLowerCase().includes(kw))
+    .slice(0, 300);
+  $("slist").innerHTML = list.map(s => {
+    const zh = zhOf(s);
+    return `<span>${esc(s)}${zh ? "（" + esc(zh) + "）" : ""}</span>`;
+  }).join("") || '<span class="muted">没有匹配的网站，也可以直接粘贴链接试试</span>';
+};
+const renderPopular = list => {
+  $("popular").innerHTML = list.map(p =>
+    `<div class="pop"><div class="badge" style="background:${esc(p.color)}">${esc(p.name[0])}</div>` +
+    `<div><b>${esc(p.zh)}</b><small>${esc(p.name)}</small></div></div>`).join("");
+};
+$("sites").addEventListener("toggle", async () => {
+  if (!$("sites").open || allSites) return;
+  try {
+    const d = await (await fetch("/api/sites")).json();
+    allSites = d.sites;
+    zhMap = d.zh || {};
+    renderPopular(d.popular || []);
+    $("count").textContent = "（约 " + allSites.length + " 个）";
+    $("sver").textContent = "yt-dlp 版本：" + d.version + "。列表仅供参考，网站改版可能暂时失效，最可靠的办法是直接试。";
+    renderSites();
+  } catch (e) {
+    $("slist").textContent = "加载失败";
+  }
+});
+$("sq").addEventListener("input", () => allSites && renderSites());
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+}
+
+const fmtSpeed = b => b ? (b / 1048576).toFixed(1) + " MB/s" : "";
+const fmtEta = s => s != null ? "剩余 " + fmt(s) : "";
+const setBusy = busy => { $("dlv").disabled = busy; $("dla").disabled = busy; };
+const showProg = (pct, text) => {
+  $("prog").style.display = "block";
+  $("fill").style.width = (pct ?? 5) + "%";
+  $("ptext").textContent = text;
+};
+
+const go = async type => {
+  $("err").textContent = "";
+  setBusy(true);
+  showProg(0, "正在排队…");
+  try {
+    const r = await fetch("/api/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: $("url").value.trim(),
+        type,
+        height: type === "video" ? $("quality").value : ""
+      })
+    });
+    const s = await r.json();
+    if (!r.ok) throw new Error(s.error || "启动失败");
+
+    while (true) {
+      await new Promise(res => setTimeout(res, 1000));
+      const p = await (await fetch("/api/progress/" + s.id)).json();
+      if (p.error && p.status !== "error") throw new Error(p.error);
+      if (p.status === "error") throw new Error(p.error || "下载失败");
+      if (p.status === "queued") showProg(0, "正在排队…");
+      else if (p.status === "downloading")
+        showProg(p.percent, [p.percent != null ? p.percent + "%" : "下载中…", fmtSpeed(p.speed), fmtEta(p.eta)]
+          .filter(Boolean).join(" · "));
+      else if (p.status === "processing") showProg(100, "处理中（合并音视频）…");
+      else if (p.status === "done") {
+        showProg(100, "完成，开始保存文件");
+        window.location.href = "/api/file/" + s.id;
+        break;
+      }
+    }
+  } catch (e) {
+    $("prog").style.display = "none";
+    $("err").textContent = e.message;
+  } finally {
+    setBusy(false);
+  }
+};
+$("dlv").onclick = () => go("video");
+$("dla").onclick = () => go("audio");
+</script>
+</body>
+</html>

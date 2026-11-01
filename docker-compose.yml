@@ -1,0 +1,6 @@
+services:
+  downloader:
+    build: .
+    ports:
+      - "${BIND:-0.0.0.0}:8000:8000"
+    restart: unless-stopped
